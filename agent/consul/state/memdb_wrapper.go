@@ -73,6 +73,8 @@ func (db *memDBWrapper) WriteTxnRestore() *txnWrapper {
 type txnWrapper struct {
 	// Index in raft where the write is occurring. The value is zero for a
 	// read-only transaction, and for a WriteTxnRestore transaction.
+	// Index is stored so that it may be passed along to any subscribers as part
+	// of a change event.
 	Index uint64
 	*memdb.Txn
 }
