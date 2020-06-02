@@ -7,6 +7,7 @@ import (
 
 	"github.com/hashicorp/consul/lib"
 	"github.com/hashicorp/consul/lib/decode"
+	"github.com/hashicorp/go-multierror"
 	"github.com/hashicorp/hcl"
 	"github.com/mitchellh/mapstructure"
 )
@@ -34,7 +35,7 @@ func FormatFrom(name string) string {
 }
 
 // Parse parses a config fragment in either JSON or HCL format.
-func Parse(data string, format string) (c Config, md mapstructure.Metadata, err error) {
+func Parse(data string, format string) (c Config, keys []string, err error) {
 	var raw map[string]interface{}
 	switch format {
 	case "json":
@@ -45,7 +46,7 @@ func Parse(data string, format string) (c Config, md mapstructure.Metadata, err 
 		err = fmt.Errorf("invalid format: %s", format)
 	}
 	if err != nil {
-		return Config{}, mapstructure.Metadata{}, err
+		return Config{}, nil, err
 	}
 
 	// We want to be able to report fields which we cannot map as an
@@ -108,19 +109,28 @@ func Parse(data string, format string) (c Config, md mapstructure.Metadata, err 
 		"config_entries.bootstrap", // completely ignore this tree (fixed elsewhere)
 	})
 
+	var md mapstructure.Metadata
 	d, err := mapstructure.NewDecoder(&mapstructure.DecoderConfig{
 		DecodeHook: decode.HookTranslateKeys,
 		Metadata:   &md,
 		Result:     &c,
 	})
 	if err != nil {
-		return Config{}, mapstructure.Metadata{}, err
+		return Config{}, nil, err
 	}
 	if err := d.Decode(m); err != nil {
-		return Config{}, mapstructure.Metadata{}, err
+		return Config{}, nil, err
 	}
 
-	return c, md, nil
+	for _, k := range md.Unused {
+		err = multierror.Append(err, fmt.Errorf("invalid config key %s", k))
+	}
+
+	// Don't check these here. The builder can emit warnings for fields it
+	// doesn't like
+	keys = md.Keys
+
+	return
 }
 
 // Config defines the format of a configuration file in either JSON or
@@ -145,6 +155,8 @@ type Config struct {
 	ACLDownPolicy *string `json:"acl_down_policy,omitempty" hcl:"acl_down_policy" mapstructure:"acl_down_policy"`
 	// DEPRECATED (ACL-Legacy-Compat) - moved into the "acl" stanza
 	ACLEnableKeyListPolicy *bool `json:"acl_enable_key_list_policy,omitempty" hcl:"acl_enable_key_list_policy" mapstructure:"acl_enable_key_list_policy"`
+	// DEPRECATED (ACL-Legacy-Compat) -  pre-version8 enforcement is deprecated.
+	ACLEnforceVersion8 *bool `json:"acl_enforce_version_8,omitempty" hcl:"acl_enforce_version_8" mapstructure:"acl_enforce_version_8"`
 	// DEPRECATED (ACL-Legacy-Compat) - moved into the "acl" stanza
 	ACLMasterToken *string `json:"acl_master_token,omitempty" hcl:"acl_master_token" mapstructure:"acl_master_token"`
 	// DEPRECATED (ACL-Legacy-Compat) - moved into the "acl.tokens" stanza
@@ -161,6 +173,7 @@ type Config struct {
 	AdvertiseAddrWAN                 *string                  `json:"advertise_addr_wan,omitempty" hcl:"advertise_addr_wan" mapstructure:"advertise_addr_wan"`
 	AdvertiseAddrWANIPv4             *string                  `json:"advertise_addr_wan_ipv4,omitempty" hcl:"advertise_addr_wan_ipv4" mapstructure:"advertise_addr_wan_ipv4"`
 	AdvertiseAddrWANIPv6             *string                  `json:"advertise_addr_wan_ipv6,omitempty" hcl:"advertise_addr_wan_ipv6" mapstructure:"advertise_addr_ipv6"`
+	AutoConfig                       AutoConfigRaw            `json:"auto_config,omitempt" hcl:"auto_config" mapstructure:"auto_config"`
 	Autopilot                        Autopilot                `json:"autopilot,omitempty" hcl:"autopilot" mapstructure:"autopilot"`
 	BindAddr                         *string                  `json:"bind_addr,omitempty" hcl:"bind_addr" mapstructure:"bind_addr"`
 	Bootstrap                        *bool                    `json:"bootstrap,omitempty" hcl:"bootstrap" mapstructure:"bootstrap"`
@@ -744,4 +757,35 @@ type AuditSink struct {
 	RotateBytes       *int    `json:"rotate_bytes,omitempty"       hcl:"rotate_bytes"       mapstructure:"rotate_bytes"`
 	RotateDuration    *string `json:"rotate_duration,omitempty"    hcl:"rotate_duration"    mapstructure:"rotate_duration"`
 	RotateMaxFiles    *int    `json:"rotate_max_files,omitempty"   hcl:"rotate_max_files"   mapstructure:"rotate_max_files"`
+}
+
+type AutoConfigRaw struct {
+	Enabled         *bool                   `json:"enabled,omitempty" hcl:"enabled" mapstructure:"enabled"`
+	IntroToken      *string                 `json:"intro_token,omitempty" hcl:"intro_token" mapstructure:"intro_token"`
+	IntroTokenFile  *string                 `json:"intro_token_file,omitempty" hcl:"intro_token_file" mapstructure:"intro_token_file"`
+	ServerAddresses []string                `json:"server_addresses,omitempty" hcl:"server_addresses" mapstructure:"server_addresses"`
+	DNSSANs         []string                `json:"dns_sans,omitempty" hcl:"dns_sans" mapstructure:"dns_sans"`
+	IPSANs          []string                `json:"ip_sans,omitempty" hcl:"ip_sans" mapstructure:"ip_sans"`
+	Authorizer      AutoConfigAuthorizerRaw `json:"authorizer,omitempty" hcl:"authorizer" mapstructure:"authorizer"`
+}
+
+type AutoConfigAuthorizerRaw struct {
+	Enabled         *bool    `json:"enabled,omitempty" hcl:"enabled" mapstructure:"enabled"`
+	ClaimAssertions []string `json:"claim_assertions,omitempty" hcl:"claim_assertions" mapstructure:"claim_assertions"`
+	AllowReuse      *bool    `json:"allow_reuse,omitempty" hcl:"allow_reuse" mapstructure:"allow_reuse"`
+
+	// Fields to be shared with the JWT Auth Method
+	JWTSupportedAlgs     []string          `json:"jwt_supported_algs,omitempty" hcl:"jwt_supported_algs" mapstructure:"jwt_supported_algs"`
+	BoundAudiences       []string          `json:"bound_audiences,omitempty" hcl:"bound_audiences" mapstructure:"bound_audiences"`
+	ClaimMappings        map[string]string `json:"claim_mappings,omitempty" hcl:"claim_mappings" mapstructure:"claim_mappings"`
+	ListClaimMappings    map[string]string `json:"list_claim_mappings,omitempty" hcl:"list_claim_mappings" mapstructure:"list_claim_mappings"`
+	OIDCDiscoveryURL     *string           `json:"oidc_discovery_url,omitempty" hcl:"oidc_discovery_url" mapstructure:"oidc_discovery_url"`
+	OIDCDiscoveryCACert  *string           `json:"oidc_discovery_ca_cert,omitempty" hcl:"oidc_discovery_ca_cert" mapstructure:"oidc_discovery_ca_cert"`
+	JWKSURL              *string           `json:"jwks_url,omitempty" hcl:"jwks_url" mapstructure:"jwks_url"`
+	JWKSCACert           *string           `json:"jwks_ca_cert,omitempty" hcl:"jwks_ca_cert" mapstructure:"jwks_ca_cert"`
+	JWTValidationPubKeys []string          `json:"jwt_validation_pub_keys,omitempty" hcl:"jwt_validation_pub_keys" mapstructure:"jwt_validation_pub_keys"`
+	BoundIssuer          *string           `json:"bound_issuer,omitempty" hcl:"bound_issuer" mapstructure:"bound_issuer"`
+	ExpirationLeeway     *string           `json:"expiration_leeway,omitempty" hcl:"expiration_leeway" mapstructure:"expiration_leeway"`
+	NotBeforeLeeway      *string           `json:"not_before_leeway,omitempty" hcl:"not_before_leeway" mapstructure:"not_before_leeway"`
+	ClockSkewLeeway      *string           `json:"clock_skew_leeway,omitempty" hcl:"clock_skew_leeway" mapstructure:"clock_skew_leeway"`
 }

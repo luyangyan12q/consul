@@ -104,6 +104,13 @@ type RuntimeConfig struct {
 	// hcl: acl.down_policy = ("allow"|"deny"|"extend-cache"|"async-cache")
 	ACLDownPolicy string
 
+	// DEPRECATED (ACL-Legacy-Compat)
+	// ACLEnforceVersion8 is used to gate a set of ACL policy features that
+	// are opt-in prior to Consul 0.8 and opt-out in Consul 0.8 and later.
+	//
+	// hcl: acl_enforce_version_8 = (true|false)
+	ACLEnforceVersion8 bool
+
 	// ACLEnableKeyListPolicy is used to opt-in to the "list" policy added to
 	// KV ACLs in Consul 1.0.
 	//
@@ -533,6 +540,10 @@ type RuntimeConfig struct {
 	// AutoEncryptAllowTLS enables the server to respond to
 	// AutoEncrypt.Sign requests.
 	AutoEncryptAllowTLS bool
+
+	// AutoConfig is a grouping of the configurations around the agent auto configuration
+	// process including how servers can authorize requests.
+	AutoConfig AutoConfig
 
 	// ConnectEnabled opts the agent into connect. It should be set on all clients
 	// and servers in a cluster for correct connect operation.
@@ -1560,6 +1571,24 @@ type RuntimeConfig struct {
 	EnterpriseRuntimeConfig
 }
 
+type AutoConfig struct {
+	Enabled         bool
+	IntroToken      string
+	IntroTokenFile  string
+	ServerAddresses []string
+	DNSSANs         []string
+	IPSANs          []net.IP
+	Authorizer      AutoConfigAuthorizer
+}
+
+type AutoConfigAuthorizer struct {
+	Enabled    bool
+	AuthMethod structs.ACLAuthMethod
+	// AuthMethodConfig ssoauth.Config
+	ClaimAssertions []string
+	AllowReuse      bool
+}
+
 func (c *RuntimeConfig) apiAddresses(maxPerType int) (unixAddrs, httpAddrs, httpsAddrs []string) {
 	if len(c.HTTPSAddrs) > 0 {
 		for i, addr := range c.HTTPSAddrs {
@@ -1723,6 +1752,10 @@ func (c *RuntimeConfig) ToTLSUtilConfig() tlsutil.Config {
 // isSecret determines whether a field name represents a field which
 // may contain a secret.
 func isSecret(name string) bool {
+	// special cases for AuthMethod locality and intro token file
+	if name == "TokenLocality" || name == "IntroTokenFile" {
+		return false
+	}
 	name = strings.ToLower(name)
 	return strings.Contains(name, "key") || strings.Contains(name, "token") || strings.Contains(name, "secret")
 }
