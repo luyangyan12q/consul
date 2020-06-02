@@ -163,7 +163,7 @@ func NewStateStore(gc *TombstoneGC) (*Store, error) {
 		lockDelay:    NewDelay(),
 	}
 	s.db = &memDBWrapper{
-		MemDB: db,
+		db: db,
 	}
 	// TODO: s.publisher = NewEventPublisher(s, 0, 10*time.Second)
 	return s, nil
